@@ -1,0 +1,1 @@
+"""Market connectivity adapters."""

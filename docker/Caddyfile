@@ -1,0 +1,8 @@
+{$CADDY_DOMAIN} {
+    encode zstd gzip
+
+    @backend path /health /docs* /openapi.json /auth/* /connectors/* /engine/* /strategies* /broker-accounts* /execution/* /backtests /risk/* /paper/* /analytics/* /system/* /indicators /market/* /ws/*
+    reverse_proxy @backend backend:8000
+
+    reverse_proxy frontend:3000
+}

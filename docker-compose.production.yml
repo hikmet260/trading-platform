@@ -1,0 +1,165 @@
+name: trading-platform
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trading}
+      POSTGRES_USER: ${POSTGRES_USER:-trader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-trader}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-trading}
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://${CADDY_DOMAIN}}
+      API_ACCESS_TOKEN: ${API_ACCESS_TOKEN:-}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY to a high-entropy secret}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?Set the initial admin email}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?Set the initial admin password}
+      BROKER_CREDENTIALS_KEY: ${BROKER_CREDENTIALS_KEY:?Set BROKER_CREDENTIALS_KEY to a generated Fernet key}
+      TENANT_ID: ${TENANT_ID:-local}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
+      TELEGRAM_ROLE: publisher
+      TELEGRAM_TIMEZONE: ${TELEGRAM_TIMEZONE:-UTC}
+      CRYPTO_EXCHANGE: ${CRYPTO_EXCHANGE:-binance}
+      CRYPTO_API_KEY: ${CRYPTO_API_KEY:-}
+      CRYPTO_API_SECRET: ${CRYPTO_API_SECRET:-}
+      CRYPTO_API_PASSWORD: ${CRYPTO_API_PASSWORD:-}
+      CRYPTO_SANDBOX: ${CRYPTO_SANDBOX:-true}
+      CRYPTO_DEFAULT_TYPE: ${CRYPTO_DEFAULT_TYPE:-spot}
+      LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
+      ENGINE_ENABLED: ${ENGINE_ENABLED:-false}
+      ENGINE_SYMBOLS: ${ENGINE_SYMBOLS:-BTC/USDT}
+      ENGINE_MT5_SYMBOLS: ${ENGINE_MT5_SYMBOLS:-EURUSD,XAUUSD}
+      ENGINE_TIMEFRAME: ${ENGINE_TIMEFRAME:-1m}
+      ENGINE_PAPER_MODE: ${ENGINE_PAPER_MODE:-true}
+      EXECUTION_MODE: ${EXECUTION_MODE:-semi_auto}
+      ENGINE_MAX_DAILY_DRAWDOWN_PCT: ${ENGINE_MAX_DAILY_DRAWDOWN_PCT:-3.0}
+      ENGINE_NEWS_BLACKOUT_MINUTES: ${ENGINE_NEWS_BLACKOUT_MINUTES:-15}
+      NEWS_EVENTS_JSON: ${NEWS_EVENTS_JSON:-[]}
+      NEWS_CALENDAR_API_KEY: ${NEWS_CALENDAR_API_KEY:-}
+      NEWS_CALENDAR_POLL_SECONDS: ${NEWS_CALENDAR_POLL_SECONDS:-900}
+      NEWS_CALENDAR_REQUIRED: ${NEWS_CALENDAR_REQUIRED:-true}
+      PAPER_ACCOUNT_EQUITY: ${PAPER_ACCOUNT_EQUITY:-10000}
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  telegram-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.telegram_worker"]
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-trader}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-trading}
+      REDIS_URL: redis://redis:6379/0
+      BROKER_CREDENTIALS_KEY: ${BROKER_CREDENTIALS_KEY:?Set BROKER_CREDENTIALS_KEY to a generated Fernet key}
+      LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
+      ENGINE_PAPER_MODE: ${ENGINE_PAPER_MODE:-true}
+      TENANT_ID: ${TENANT_ID:-local}
+      NEWS_CALENDAR_API_KEY: ${NEWS_CALENDAR_API_KEY:-}
+      NEWS_CALENDAR_POLL_SECONDS: ${NEWS_CALENDAR_POLL_SECONDS:-900}
+      NEWS_CALENDAR_REQUIRED: ${NEWS_CALENDAR_REQUIRED:-true}
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
+      TELEGRAM_ROLE: worker
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      TELEGRAM_TIMEZONE: ${TELEGRAM_TIMEZONE:-UTC}
+      ENGINE_MAX_DAILY_DRAWDOWN_PCT: ${ENGINE_MAX_DAILY_DRAWDOWN_PCT:-3.0}
+      ENGINE_NEWS_BLACKOUT_MINUTES: ${ENGINE_NEWS_BLACKOUT_MINUTES:-15}
+      PAPER_ACCOUNT_EQUITY: ${PAPER_ACCOUNT_EQUITY:-10000}
+      NEWS_EVENTS_JSON: ${NEWS_EVENTS_JSON:-[]}
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.production
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+    restart: unless-stopped
+    expose:
+      - "3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:?Set CADDY_DOMAIN to a DNS name pointing at this VPS}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

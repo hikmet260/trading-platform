@@ -1,0 +1,4 @@
+# Install only on the Windows host that runs the MetaTrader 5 terminal:
+#   py -m pip install -r requirements-mt5-windows.txt
+-r requirements.txt
+MetaTrader5>=5.0.0
