@@ -33,6 +33,9 @@ class Database:
         await self.engine.dispose()
 
     async def ping(self) -> bool:
-        async with self.engine.connect() as connection:
-            await connection.execute(text("SELECT 1"))
-        return True
+        try:
+            async with self.engine.connect() as connection:
+                await connection.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False
