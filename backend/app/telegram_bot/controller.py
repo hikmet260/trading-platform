@@ -15,6 +15,7 @@ from app.engine.chart_snapshot import render_candlestick_snapshot
 from app.storage.cache import MarketCache
 from app.storage.database import Database
 from app.storage.models import TradeRecord
+from app.notifications.service import enqueue_notification, enqueue_notification_in_session
 
 
 class TelegramController:
@@ -27,18 +28,58 @@ class TelegramController:
         self.on_kill = None
         self.on_resume = None
         self.on_decision = None
+        self.role = settings.telegram_role
+        self.enabled = settings.telegram_enabled
+        self.bot_token = settings.telegram_bot_token
+        self.chat_id = settings.telegram_chat_id
+        self.allowed_user_ids = set(settings.telegram_user_id_list)
+        self.timezone = settings.telegram_timezone
+        self._signature: tuple[object, ...] | None = None
+
+    async def apply_config(
+        self, *, enabled: bool, bot_token: str, chat_id: str,
+        allowed_user_ids: str, timezone_name: str,
+    ) -> None:
+        """Apply durable tenant settings and (re)start the bot if needed.
+
+        The process role stays environment-controlled.  The API process uses
+        ``publisher`` and the dedicated worker uses ``worker``; only the worker
+        may poll Telegram.  Enabled/token/chat/ACL/timezone are tenant settings.
+        """
+        configured_allowed = {
+            value.strip() for value in allowed_user_ids.split(",") if value.strip()
+        } or ({chat_id} if chat_id else set())
+        signature = (enabled, bot_token, chat_id, tuple(sorted(configured_allowed)), timezone_name)
+        if signature == self._signature:
+            return
+        was_running = self.state == "running"
+        if was_running:
+            await self.stop()
+        self.enabled = enabled
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.allowed_user_ids = configured_allowed
+        self.timezone = timezone_name or "UTC"
+        try:
+            if was_running or enabled:
+                await self.start()
+        except Exception:
+            await self.stop()
+            self.state = "error"
+            raise
+        self._signature = signature
 
     async def start(self) -> None:
-        if not settings.telegram_enabled:
+        if not self.enabled:
             self.state = "disabled"
             return
-        if settings.telegram_role == "publisher":
+        if self.role == "publisher":
             self.state = "publisher"
             return
-        if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        if not self.bot_token or not self.chat_id:
             self.state = "misconfigured"
             return
-        self.application = Application.builder().token(settings.telegram_bot_token).build()
+        self.application = Application.builder().token(self.bot_token).build()
         self.application.add_handler(CallbackQueryHandler(self._on_callback))
         self.application.add_handler(CommandHandler("kill", self._on_kill_command))
         self.application.add_handler(CommandHandler("resume", self._on_resume_command))
@@ -66,44 +107,108 @@ class TelegramController:
         if self.state == "running":
             self.state = "stopped"
 
-    async def send_trade_alert(self, trade: dict) -> None:
-        if not self.application:
-            if settings.telegram_enabled and settings.telegram_role == "publisher":
-                await self.cache.redis.publish("telegram:alerts", json.dumps(trade, allow_nan=False))
+    async def send_trade_alert(self, trade: dict, *, session=None) -> None:
+        trade_id = str(trade["id"])
+        parameters = {
+            "tenant_id": str(trade.get("tenant_id") or settings.tenant_id),
+            "kind": "trade_proposal",
+            "payload": {
+                "kind": "trade_proposal", "trade": trade,
+                "title": "Trade proposal", "body": "A trade proposal needs your review.",
+                "url": "/trades",
+            },
+            "dedupe_key": f"trade-proposal:{trade_id}",
+            "telegram": self.enabled,
+            "push": True,
+        }
+        if session is None:
+            await enqueue_notification(self.database, **parameters)
+        else:
+            await enqueue_notification_in_session(session, **parameters)
+
+    async def send_event(self, *, tenant_id: str, kind: str, title: str, body: str,
+                         url: str, dedupe_key: str, telegram: bool = True,
+                         target_user_id: str | None = None, push: bool = True,
+                         session=None) -> int:
+        parameters = {
+            "tenant_id": tenant_id,
+            "kind": kind,
+            "payload": {"kind": kind, "title": title, "body": body, "url": url},
+            "dedupe_key": dedupe_key,
+            "telegram": telegram and self.enabled,
+            "push": push,
+            "target_user_id": target_user_id,
+        }
+        if session is None:
+            _, deliveries = await enqueue_notification(self.database, **parameters)
+        else:
+            _, deliveries = await enqueue_notification_in_session(session, **parameters)
+        return deliveries
+
+    async def deliver_notification(self, notification: dict) -> None:
+        if not self.application or not self.chat_id:
+            raise RuntimeError("Telegram notification worker is not connected")
+        if notification.get("kind") == "trade_proposal":
+            await self._deliver_trade_alert(notification["trade"])
             return
+        title = escape(str(notification.get("title") or "Trading platform alert"))
+        body = escape(str(notification.get("body") or "You have a new notification."))
+        await self.application.bot.send_message(
+            chat_id=int(self.chat_id), text=f"<b>{title}</b>\n{body}", parse_mode="HTML",
+        )
+
+    async def _deliver_trade_alert(self, trade: dict) -> None:
+        if not self.application or not self.chat_id:
+            raise RuntimeError("Telegram notification worker is not connected")
         trade_id = str(trade["id"])
         live_mode = trade.get("mode") == "live"
-        await self.cache.redis.set(f"telegram:pending:{trade_id}", json.dumps(trade), ex=900)
+        ttl = 900
+        expires_at = trade.get("expires_at")
+        if expires_at:
+            try:
+                expiration = datetime.fromisoformat(str(expires_at))
+                if expiration.tzinfo is None:
+                    expiration = expiration.replace(tzinfo=timezone.utc)
+                ttl = max(1, min(86_400, int((expiration - datetime.now(timezone.utc)).total_seconds())))
+            except ValueError:
+                pass
+        await self.cache.redis.set(f"telegram:pending:{trade_id}", json.dumps(trade), ex=ttl)
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Approve live order" if live_mode else "Approve (paper)", callback_data=f"approve:{trade_id}"),
              InlineKeyboardButton("Skip", callback_data=f"skip:{trade_id}")],
             [InlineKeyboardButton("Emergency Kill-Switch", callback_data="kill")],
         ])
+        tier_info = f"Tier: {trade['tier']}\n" if trade.get("tier") else ""
+        unit = str(trade.get("quantity_unit") or "lots")
         text = (
             f"<b>Trade proposal — {'live order' if live_mode else 'paper mode'}</b>\n"
             f"{escape(str(trade['side']).upper())} {escape(str(trade['symbol']))}\n"
+            f"{tier_info}"
             f"Entry: {float(trade['entry_price']):.8g}\n"
-            f"Position size: {float(trade['quantity']):.8g}\n"
+            f"Position size: {float(trade['quantity']):.8g} {escape(unit)}\n"
             f"Risk: {float(trade['risk_amount']):.2f} ({float(trade['risk_pct']):.3g}%)\n"
             f"SL: {float(trade['stop_loss']):.8g}  TP: {float(trade['take_profit']):.8g}"
         )
         if trade.get("candles"):
             chart = render_candlestick_snapshot(trade["candles"], str(trade["symbol"]), str(trade.get("timeframe", "")))
             await self.application.bot.send_photo(
-                chat_id=int(settings.telegram_chat_id), photo=chart, caption=text,
+                chat_id=int(self.chat_id), photo=chart, caption=text,
                 parse_mode="HTML", reply_markup=keyboard,
             )
         else:
             await self.application.bot.send_message(
-                chat_id=int(settings.telegram_chat_id), text=text, parse_mode="HTML", reply_markup=keyboard,
+                chat_id=int(self.chat_id), text=text, parse_mode="HTML", reply_markup=keyboard,
             )
+
+    def _authorized_ids(self) -> set[str]:
+        return self.allowed_user_ids or ({self.chat_id} if self.chat_id else set())
 
     async def _on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
         if query is None:
             return
-        if (str(query.message.chat_id if query.message else "") != str(settings.telegram_chat_id)
-                or str(query.from_user.id) not in settings.telegram_user_id_list):
+        if (str(query.message.chat_id if query.message else "") != str(self.chat_id)
+                or str(query.from_user.id) not in self._authorized_ids()):
             await query.answer("Not authorized", show_alert=True)
             return
         await query.answer()
@@ -131,12 +236,24 @@ class TelegramController:
             return
         pending = await self.cache.redis.get(f"telegram:pending:{trade_id}")
         if not pending:
-            await self._edit_callback_message(query, "This trade proposal expired")
-            return
-        pending_trade = json.loads(pending)
+            async with self.database.sessions() as session:
+                trade = await session.scalar(select(TradeRecord).where(
+                    TradeRecord.id == trade_id,
+                    TradeRecord.tenant_id == settings.tenant_id,
+                    TradeRecord.status == "proposed",
+                ))
+                if trade is None:
+                    await self._edit_callback_message(query, "This trade proposal expired or was already handled")
+                    return
+                pending_trade = {
+                    "tenant_id": trade.tenant_id,
+                    "mode": trade.mode,
+                }
+        else:
+            pending_trade = json.loads(pending)
         tenant_id = pending_trade.get("tenant_id")
         if self.on_decision and not await self.on_decision(trade_id, action == "approve", tenant_id):
-            await self._edit_callback_message(query, "This paper trade is no longer pending or risk validation rejected it")
+            await self._edit_callback_message(query, "This trade proposal is no longer pending or risk validation rejected it")
             return
         await self.cache.redis.set(f"telegram:decision:{trade_id}", action, ex=86_400)
         await self.cache.redis.delete(f"telegram:pending:{trade_id}")
@@ -156,8 +273,8 @@ class TelegramController:
     async def _authorized(self, update: Update) -> bool:
         chat = update.effective_chat
         user = update.effective_user
-        if (chat is None or str(chat.id) != str(settings.telegram_chat_id) or user is None
-                or str(user.id) not in settings.telegram_user_id_list):
+        if (chat is None or str(chat.id) != str(self.chat_id) or user is None
+                or str(user.id) not in self._authorized_ids()):
             if update.effective_message:
                 await update.effective_message.reply_text("Not authorized")
             return False
@@ -196,8 +313,11 @@ class TelegramController:
             await update.effective_message.reply_text("Kill-switch cleared. Paper mode remains active.")
 
     async def _digest_loop(self) -> None:
-        local_timezone = ZoneInfo(settings.telegram_timezone)
         while True:
+            try:
+                local_timezone = ZoneInfo(self.timezone)
+            except Exception:
+                local_timezone = ZoneInfo("UTC")
             now = datetime.now(local_timezone)
             next_run = datetime.combine(now.date(), time(hour=20), local_timezone)
             if next_run <= now:
@@ -205,16 +325,26 @@ class TelegramController:
             next_run_utc = next_run.astimezone(timezone.utc)
             start_utc = datetime.combine(now.date(), time.min, local_timezone).astimezone(timezone.utc)
             await asyncio.sleep((next_run - now).total_seconds())
-            async with self.database.sessions() as session:
-                result = await session.execute(select(TradeRecord).where(
-                    TradeRecord.tenant_id == settings.tenant_id,
-                    TradeRecord.closed_at >= start_utc, TradeRecord.closed_at < next_run_utc,
-                ))
-                trades = list(result.scalars())
-            pnl = sum(trade.pnl or 0.0 for trade in trades)
-            wins = sum(1 for trade in trades if (trade.pnl or 0.0) > 0)
-            if self.application:
-                await self.application.bot.send_message(
-                    chat_id=int(settings.telegram_chat_id),
-                    text=f"Daily trading digest\nClosed trades: {len(trades)}\nWins: {wins}\nRealized P&L: {pnl:.2f}",
-                )
+            while True:
+                try:
+                    async with self.database.sessions() as session:
+                        result = await session.execute(select(TradeRecord).where(
+                            TradeRecord.tenant_id == settings.tenant_id,
+                            TradeRecord.closed_at >= start_utc, TradeRecord.closed_at < next_run_utc,
+                        ))
+                        trades = list(result.scalars())
+                    pnl = sum(trade.pnl or 0.0 for trade in trades if trade.pnl is not None)
+                    wins = sum(1 for trade in trades if (trade.pnl or 0.0) > 0)
+                    await self.send_event(
+                        tenant_id=settings.tenant_id, kind="daily_digest",
+                        title="Daily trading digest",
+                        body=f"Closed trades: {len(trades)} · Wins: {wins} · Realized P&L: {pnl:.2f}",
+                        url="/trades", dedupe_key=f"daily-digest:{settings.tenant_id}:{now.date().isoformat()}",
+                        push=False,
+                    )
+                    break
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logging.exception("Could not queue the daily trading digest; retrying in 60 seconds")
+                    await asyncio.sleep(60)

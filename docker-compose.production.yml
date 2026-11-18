@@ -17,6 +17,32 @@ services:
       retries: 10
       start_period: 10s
 
+  postgres-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/scripts/backup-postgres.sh"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-trading}
+      PGUSER: ${POSTGRES_USER:-trader}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+      POSTGRES_DB: ${POSTGRES_DB:-trading}
+      POSTGRES_USER: ${POSTGRES_USER:-trader}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - postgres_backups:/backups
+      - ./docker/backup-postgres.sh:/scripts/backup-postgres.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "find /backups -type f -name 'trading-*.dump.gz' -mmin -1500 | grep -q ."]
+      interval: 15m
+      timeout: 5s
+      retries: 2
+      start_period: 3m
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -52,6 +78,8 @@ services:
       TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
       TELEGRAM_ROLE: publisher
       TELEGRAM_TIMEZONE: ${TELEGRAM_TIMEZONE:-UTC}
+      WEBPUSH_PUBLIC_KEY: ${WEBPUSH_PUBLIC_KEY:-}
+      WEBPUSH_SUBJECT: ${WEBPUSH_SUBJECT:-mailto:admin@example.com}
       CRYPTO_EXCHANGE: ${CRYPTO_EXCHANGE:-binance}
       CRYPTO_API_KEY: ${CRYPTO_API_KEY:-}
       CRYPTO_API_SECRET: ${CRYPTO_API_SECRET:-}
@@ -110,6 +138,9 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
       TELEGRAM_TIMEZONE: ${TELEGRAM_TIMEZONE:-UTC}
+      WEBPUSH_PUBLIC_KEY: ${WEBPUSH_PUBLIC_KEY:-}
+      WEBPUSH_PRIVATE_KEY: ${WEBPUSH_PRIVATE_KEY:-}
+      WEBPUSH_SUBJECT: ${WEBPUSH_SUBJECT:-mailto:admin@example.com}
       ENGINE_MAX_DAILY_DRAWDOWN_PCT: ${ENGINE_MAX_DAILY_DRAWDOWN_PCT:-3.0}
       ENGINE_NEWS_BLACKOUT_MINUTES: ${ENGINE_NEWS_BLACKOUT_MINUTES:-15}
       PAPER_ACCOUNT_EQUITY: ${PAPER_ACCOUNT_EQUITY:-10000}
@@ -160,6 +191,7 @@ services:
 
 volumes:
   postgres_data:
+  postgres_backups:
   redis_data:
   caddy_data:
   caddy_config:

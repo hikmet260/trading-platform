@@ -2,3 +2,5 @@
 #   py -m pip install -r requirements-mt5-windows.txt
 -r requirements.txt
 MetaTrader5>=5.0.0
+httpx>=0.27,<1.0
+pydantic-settings>=2.6,<3.0

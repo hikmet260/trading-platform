@@ -17,9 +17,10 @@ def calculate_indicators(candles: list[dict[str, Any]]) -> dict[str, list[float 
     ohlc = frame[["open", "high", "low", "close"]].apply(pd.to_numeric, errors="coerce")
     if ohlc.isna().any().any() or not np.isfinite(ohlc.to_numpy()).all() or (ohlc <= 0).any().any():
         raise ValueError("Candle OHLC values must be finite positive numbers")
-    if ((ohlc["high"] < ohlc[["open", "close"]].max(axis=1)) |
-            (ohlc["low"] > ohlc[["open", "close"]].min(axis=1)) |
-            (ohlc["high"] < ohlc["low"])).any():
+    eps = 1e-9
+    if ((ohlc["high"] < ohlc[["open", "close"]].max(axis=1) - eps) |
+            (ohlc["low"] > ohlc[["open", "close"]].min(axis=1) + eps) |
+            (ohlc["high"] < ohlc["low"] - eps)).any():
         raise ValueError("Candle high/low values do not contain the open and close")
     prices = ohlc["close"]
     changes = prices.diff()

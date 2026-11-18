@@ -1,5 +1,457 @@
 @import "tailwindcss";
 
-:root { color-scheme: dark; }
-* { box-sizing: border-box; }
-body { margin: 0; background: #090d14; color: #e6edf7; font-family: Arial, Helvetica, sans-serif; }
+@theme {
+  --font-sans: 'Ubuntu', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: 'Ubuntu Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    --foreground: #f4f6f8;
+    --surface: #12131a;
+    --surface-inset: #0d0e14;
+    --border: #1e212d;
+    --chart-up: #00f5a0;
+    --chart-candle-down: #f43f5e;
+    --accent: #06b6d4;
+    --accent-hover: #22d3ee;
+    --accent-glow: rgba(6, 182, 212, 0.2);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    width: 100%;
+    overflow-x: hidden;
+    background: #0b0c10;
+    color: #f4f6f8;
+    font-family: 'Ubuntu', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  input, button, select, textarea {
+    font-family: inherit;
+  }
+
+  code, kbd, samp, pre, .font-mono {
+    font-family: 'Ubuntu Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  }
+
+  .font-sans {
+    font-family: 'Ubuntu', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  }
+
+  .rounded-ele {
+    border-radius: 0.5rem;
+  }
+}
+
+/* -------------------------------------------------------------
+ * CYBER OBSIDIAN DARK THEME SURFACES
+ * ------------------------------------------------------------- */
+html:not(.theme-white) body,
+html.theme-charcoal body,
+[data-theme="charcoal"] body {
+  background-color: #0b0c10 !important;
+  color: #f4f6f8 !important;
+}
+
+html:not(.theme-white) .bg-\[\#121214\],
+html.theme-charcoal .bg-\[\#121214\],
+[data-theme="charcoal"] .bg-\[\#121214\] {
+  background-color: #0b0c10 !important;
+}
+
+html:not(.theme-white) .bg-\[\#18181b\],
+html.theme-charcoal .bg-\[\#18181b\],
+[data-theme="charcoal"] .bg-\[\#18181b\] {
+  background-color: #12131a !important;
+}
+
+html:not(.theme-white) .bg-\[\#141416\],
+html:not(.theme-white) .bg-\[\#131316\],
+html.theme-charcoal .bg-\[\#141416\],
+html.theme-charcoal .bg-\[\#131316\],
+[data-theme="charcoal"] .bg-\[\#141416\],
+[data-theme="charcoal"] .bg-\[\#131316\] {
+  background-color: #0d0e14 !important;
+}
+
+html:not(.theme-white) .bg-\[\#1f1f23\],
+html:not(.theme-white) .bg-\[\#1f1f24\],
+html:not(.theme-white) .bg-\[\#222227\],
+html:not(.theme-white) .bg-\[\#222228\],
+html.theme-charcoal .bg-\[\#1f1f23\],
+html.theme-charcoal .bg-\[\#1f1f24\],
+html.theme-charcoal .bg-\[\#222227\],
+html.theme-charcoal .bg-\[\#222228\],
+[data-theme="charcoal"] .bg-\[\#1f1f23\],
+[data-theme="charcoal"] .bg-\[\#1f1f24\],
+[data-theme="charcoal"] .bg-\[\#222227\],
+[data-theme="charcoal"] .bg-\[\#222228\] {
+  background-color: #181a24 !important;
+}
+
+html:not(.theme-white) .border-\[\#27272a\],
+html:not(.theme-white) .border-\[\#26262b\],
+html:not(.theme-white) .border-\[\#2b2b32\],
+html:not(.theme-white) .border-\[\#2e2e34\],
+html.theme-charcoal .border-\[\#27272a\],
+html.theme-charcoal .border-\[\#26262b\],
+html.theme-charcoal .border-\[\#2b2b32\],
+html.theme-charcoal .border-\[\#2e2e34\],
+[data-theme="charcoal"] .border-\[\#27272a\],
+[data-theme="charcoal"] .border-\[\#26262b\],
+[data-theme="charcoal"] .border-\[\#2b2b32\],
+[data-theme="charcoal"] .border-\[\#2e2e34\] {
+  border-color: #1e212d !important;
+}
+
+/* Ensure bright, legible input text in dark mode */
+html:not(.theme-white) input:not([type="checkbox"]):not([type="radio"]),
+html:not(.theme-white) textarea,
+html:not(.theme-white) select,
+html.theme-charcoal input:not([type="checkbox"]):not([type="radio"]),
+html.theme-charcoal textarea,
+html.theme-charcoal select,
+[data-theme="charcoal"] input:not([type="checkbox"]):not([type="radio"]),
+[data-theme="charcoal"] textarea,
+[data-theme="charcoal"] select {
+  color: #f4f6f8 !important;
+}
+
+/* Chrome/Safari/Edge autofill in dark mode */
+html:not(.theme-white) input:-webkit-autofill,
+html.theme-charcoal input:-webkit-autofill,
+[data-theme="charcoal"] input:-webkit-autofill {
+  -webkit-text-fill-color: #f4f6f8 !important;
+  -webkit-box-shadow: 0 0 0px 1000px #0d0e14 inset !important;
+  box-shadow: 0 0 0px 1000px #0d0e14 inset !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* -------------------------------------------------------------
+ * WHITE THEME LIGHT MODE OVERRIDES
+ * ------------------------------------------------------------- */
+html.theme-white,
+[data-theme="white"] {
+  color-scheme: light !important;
+  --foreground: #09090b !important;
+  --surface: #ffffff !important;
+  --chart-up: #10b981 !important;
+  --chart-candle-down: #f43f5e !important;
+  --accent: #0891b2 !important;
+  --accent-hover: #0e7490 !important;
+}
+
+html.theme-white body,
+[data-theme="white"] body {
+  background-color: #f4f4f6 !important;
+  color: #18181b !important;
+}
+
+/* Background surfaces */
+html.theme-white .bg-\[\#121214\],
+[data-theme="white"] .bg-\[\#121214\] {
+  background-color: #f4f4f6 !important;
+  color: #18181b !important;
+}
+
+html.theme-white .bg-\[\#141416\],
+html.theme-white .bg-\[\#151518\],
+[data-theme="white"] .bg-\[\#141416\],
+[data-theme="white"] .bg-\[\#151518\] {
+  background-color: #f0f1f4 !important;
+}
+
+html.theme-white .bg-\[\#161618\],
+html.theme-white .bg-\[\#161619\],
+html.theme-white .bg-\[\#17171a\],
+html.theme-white .bg-\[\#18181b\],
+html.theme-white .bg-\[\#1c1c20\],
+html.theme-white .bg-\[\#1a1a1f\],
+html.theme-white .bg-\[\#1d1d22\],
+[data-theme="white"] .bg-\[\#161618\],
+[data-theme="white"] .bg-\[\#161619\],
+[data-theme="white"] .bg-\[\#17171a\],
+[data-theme="white"] .bg-\[\#18181b\],
+[data-theme="white"] .bg-\[\#1c1c20\],
+[data-theme="white"] .bg-\[\#1a1a1f\],
+[data-theme="white"] .bg-\[\#1d1d22\] {
+  background-color: #ffffff !important;
+}
+
+html.theme-white .bg-\[\#1f1f23\],
+html.theme-white .bg-\[\#1f1f24\],
+html.theme-white .bg-\[\#202024\],
+html.theme-white .bg-\[\#202025\],
+html.theme-white .bg-\[\#222228\],
+html.theme-white .bg-\[\#232329\],
+[data-theme="white"] .bg-\[\#1f1f23\],
+[data-theme="white"] .bg-\[\#1f1f24\],
+[data-theme="white"] .bg-\[\#202024\],
+[data-theme="white"] .bg-\[\#202025\],
+[data-theme="white"] .bg-\[\#222228\],
+[data-theme="white"] .bg-\[\#232329\] {
+  background-color: #f4f4f5 !important;
+}
+
+html.theme-white .bg-\[\#27272a\],
+html.theme-white .bg-\[\#27272e\],
+html.theme-white .bg-\[\#27272f\],
+html.theme-white .bg-\[\#131316\],
+html.theme-white .bg-\[\#1a1c27\],
+[data-theme="white"] .bg-\[\#27272a\],
+[data-theme="white"] .bg-\[\#27272e\],
+[data-theme="white"] .bg-\[\#27272f\],
+[data-theme="white"] .bg-\[\#131316\],
+[data-theme="white"] .bg-\[\#1a1c27\] {
+  background-color: #e4e4e7 !important;
+}
+
+/* Border overrides */
+html.theme-white .border-\[\#26262b\],
+html.theme-white .border-\[\#27272a\],
+html.theme-white .border-\[\#2b2b30\],
+html.theme-white .border-\[\#2b2b32\],
+html.theme-white .border-\[\#2f2f35\],
+html.theme-white .border-\[\#323238\],
+html.theme-white .border-\[\#32323a\],
+html.theme-white .border-\[\#373740\],
+[data-theme="white"] .border-\[\#26262b\],
+[data-theme="white"] .border-\[\#27272a\],
+[data-theme="white"] .border-\[\#2b2b30\],
+[data-theme="white"] .border-\[\#2b2b32\],
+[data-theme="white"] .border-\[\#2f2f35\],
+[data-theme="white"] .border-\[\#323238\],
+[data-theme="white"] .border-\[\#32323a\],
+[data-theme="white"] .border-\[\#373740\] {
+  border-color: #e4e4e7 !important;
+}
+
+/* Text overrides */
+html.theme-white .text-\[\#f4f4f5\],
+html.theme-white .text-zinc-100,
+[data-theme="white"] .text-\[\#f4f4f5\],
+[data-theme="white"] .text-zinc-100 {
+  color: #09090b !important;
+}
+
+html.theme-white .text-zinc-200,
+[data-theme="white"] .text-zinc-200 {
+  color: #18181b !important;
+}
+
+html.theme-white .text-zinc-300,
+[data-theme="white"] .text-zinc-300 {
+  color: #27272a !important;
+}
+
+html.theme-white .text-zinc-400,
+[data-theme="white"] .text-zinc-400 {
+  color: #52525b !important;
+}
+
+html.theme-white .text-zinc-500,
+[data-theme="white"] .text-zinc-500 {
+  color: #71717a !important;
+}
+
+/* Inputs, selects, and textareas */
+html.theme-white input:not([type="checkbox"]):not([type="radio"]),
+html.theme-white select,
+html.theme-white textarea,
+[data-theme="white"] input:not([type="checkbox"]):not([type="radio"]),
+[data-theme="white"] select,
+[data-theme="white"] textarea {
+  background-color: #ffffff !important;
+  color: #09090b !important;
+  border-color: #d4d4d8 !important;
+}
+
+/* Navbar header wrapper stays transparent so inner nav floating pill renders cleanly */
+html.theme-white header.sticky,
+html.light header.sticky,
+[data-theme="white"] header.sticky,
+[data-theme="light"] header.sticky {
+  background-color: transparent !important;
+}
+
+/* Dropdown popover in white theme */
+html.theme-white .shadow-2xl,
+html.light .shadow-2xl,
+[data-theme="white"] .shadow-2xl,
+[data-theme="light"] .shadow-2xl {
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* -------------------------------------------------------------
+ * WHITE THEME HOVER OVERRIDES
+ * ------------------------------------------------------------- */
+/* Hover backgrounds: replace dark hover states with crisp light-gray surfaces */
+html.theme-white .hover\:bg-\[\#222227\]:hover,
+html.theme-white .hover\:bg-\[\#1f1f24\]:hover,
+html.theme-white .hover\:bg-\[\#232328\]:hover,
+html.theme-white .hover\:bg-\[\#1c1c20\]:hover,
+html.theme-white .hover\:bg-\[\#202025\]:hover,
+html.theme-white .hover\:bg-\[\#27272a\]:hover,
+html.theme-white .hover\:bg-\[\#2c2c34\]:hover,
+html.theme-white .hover\:bg-\[\#323238\]:hover,
+html.theme-white .hover\:bg-\[\#32323c\]:hover,
+html.theme-white .hover\:bg-\[\#24242a\]:hover,
+html.theme-white .hover\:bg-\[\#222228\]:hover,
+html.theme-white .hover\:bg-\[\#272730\]:hover,
+html.theme-white .hover\:bg-\[\#28282e\]:hover,
+html.theme-white .hover\:bg-\[\#141416\]:hover,
+html.theme-white .hover\:bg-\[\#18181b\]:hover,
+html.theme-white .hover\:bg-\[\#18181b\]\/50:hover,
+html.theme-white .hover\:bg-zinc-800:hover,
+html.theme-white .hover\:bg-zinc-700:hover,
+[data-theme="white"] .hover\:bg-\[\#222227\]:hover,
+[data-theme="white"] .hover\:bg-\[\#1f1f24\]:hover,
+[data-theme="white"] .hover\:bg-\[\#232328\]:hover,
+[data-theme="white"] .hover\:bg-\[\#1c1c20\]:hover,
+[data-theme="white"] .hover\:bg-\[\#202025\]:hover,
+[data-theme="white"] .hover\:bg-\[\#27272a\]:hover,
+[data-theme="white"] .hover\:bg-\[\#2c2c34\]:hover,
+[data-theme="white"] .hover\:bg-\[\#323238\]:hover,
+[data-theme="white"] .hover\:bg-\[\#32323c\]:hover,
+[data-theme="white"] .hover\:bg-\[\#24242a\]:hover,
+[data-theme="white"] .hover\:bg-\[\#222228\]:hover,
+[data-theme="white"] .hover\:bg-\[\#272730\]:hover,
+[data-theme="white"] .hover\:bg-\[\#28282e\]:hover,
+[data-theme="white"] .hover\:bg-\[\#141416\]:hover,
+[data-theme="white"] .hover\:bg-\[\#18181b\]:hover,
+[data-theme="white"] .hover\:bg-\[\#18181b\]\/50:hover,
+[data-theme="white"] .hover\:bg-zinc-800:hover,
+[data-theme="white"] .hover\:bg-zinc-700:hover {
+  background-color: #e4e4e7 !important;
+}
+
+/* Hover text colors: text stays high-contrast dark instead of turning white/faded */
+html.theme-white .hover\:text-white:hover,
+html.theme-white .hover\:text-zinc-100:hover,
+html.theme-white .hover\:text-zinc-200:hover,
+html.theme-white .hover\:text-zinc-300:hover,
+[data-theme="white"] .hover\:text-white:hover,
+[data-theme="white"] .hover\:text-zinc-100:hover,
+[data-theme="white"] .hover\:text-zinc-200:hover,
+[data-theme="white"] .hover\:text-zinc-300:hover {
+  color: #09090b !important;
+}
+
+/* Hover borders: crisp slate/zinc instead of dark outlines */
+html.theme-white .hover\:border-\[\#3b3b44\]:hover,
+html.theme-white .hover\:border-\[\#2f2f38\]:hover,
+html.theme-white .hover\:border-\[\#3d3d45\]:hover,
+html.theme-white .hover\:border-zinc-600:hover,
+html.theme-white .hover\:border-zinc-700:hover,
+[data-theme="white"] .hover\:border-\[\#3b3b44\]:hover,
+[data-theme="white"] .hover\:border-\[\#2f2f38\]:hover,
+[data-theme="white"] .hover\:border-\[\#3d3d45\]:hover,
+[data-theme="white"] .hover\:border-zinc-600:hover,
+[data-theme="white"] .hover\:border-zinc-700:hover {
+  border-color: #94a3b8 !important;
+}
+
+/* Table rows on hover in white theme */
+html.theme-white tr:hover,
+[data-theme="white"] tr:hover {
+  background-color: #f1f2f5 !important;
+}
+
+/* Articles and cards on hover in white theme */
+html.theme-white article:hover,
+[data-theme="white"] article:hover {
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Links and secondary buttons in white theme */
+html.theme-white a.text-cyan-400,
+[data-theme="white"] a.text-cyan-400 {
+  color: #0891b2 !important;
+}
+
+html.theme-white a.text-cyan-400:hover,
+[data-theme="white"] a.text-cyan-400:hover,
+html.theme-white .hover\:text-cyan-300:hover,
+[data-theme="white"] .hover\:text-cyan-300:hover,
+html.theme-white .hover\:text-cyan-400:hover,
+[data-theme="white"] .hover\:text-cyan-400:hover {
+  color: #0e7490 !important;
+}
+
+html.theme-white .hover\:bg-cyan-950\/20:hover,
+[data-theme="white"] .hover\:bg-cyan-950\/20:hover {
+  background-color: #ecfeff !important;
+}
+
+html.theme-white .hover\:border-cyan-500\/50:hover,
+[data-theme="white"] .hover\:border-cyan-500\/50:hover {
+  border-color: #06b6d4 !important;
+}
+
+/* -------------------------------------------------------------
+ * YOUTUBE-STYLE SHIMMER SKELETON LOADER
+ * ------------------------------------------------------------- */
+@keyframes youtube-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.youtube-skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: #202330;
+}
+
+.youtube-skeleton::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0,
+    rgba(255, 255, 255, 0.08) 25%,
+    rgba(255, 255, 255, 0.22) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: youtube-shimmer 1.6s infinite ease-in-out;
+  content: '';
+  pointer-events: none;
+}
+
+html.theme-white .youtube-skeleton,
+html.light .youtube-skeleton,
+[data-theme="white"] .youtube-skeleton,
+[data-theme="light"] .youtube-skeleton {
+  background-color: #e2e8f0 !important;
+}
+
+html.theme-white .youtube-skeleton::after,
+html.light .youtube-skeleton::after,
+[data-theme="white"] .youtube-skeleton::after,
+[data-theme="light"] .youtube-skeleton::after {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0,
+    rgba(255, 255, 255, 0.5) 25%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(255, 255, 255, 0) 100%
+  ) !important;
+}

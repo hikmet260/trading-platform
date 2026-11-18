@@ -91,7 +91,7 @@ class MT5Connector(BrokerConnector):
 
     async def execute_protected_market_order(
         self, symbol: str, side: str, volume: float, stop_loss: float, take_profit: float,
-        *, deviation: int = 20, magic: int = 260114,
+        *, deviation: int = 20, magic: int = 260114, client_order_id: str | None = None,
     ) -> dict[str, Any]:
         """Submit one market order with SL/TP in the same MT5 request; never opens naked risk."""
         if side.lower() not in {"buy", "sell"} or min(volume, stop_loss, take_profit) <= 0:
@@ -126,7 +126,8 @@ class MT5Connector(BrokerConnector):
                 "type": mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL,
                 "price": round(price, digits), "sl": round(stop_loss, digits),
                 "tp": round(take_profit, digits), "deviation": deviation, "magic": magic,
-                "comment": "trading-platform-protected", "type_time": mt5.ORDER_TIME_GTC,
+                "comment": (f"tp-{client_order_id}"[:31] if client_order_id else "trading-platform-protected"),
+                "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": filling,
             }
             checked = await asyncio.to_thread(mt5.order_check, request)
@@ -137,12 +138,21 @@ class MT5Connector(BrokerConnector):
             if result is None or result.retcode not in accepted:
                 raise RuntimeError(f"MT5 rejected protected order: {getattr(result, 'comment', mt5.last_error())}")
             deal_rows = await asyncio.to_thread(mt5.history_deals_get, ticket=int(result.deal)) if result.deal else None
-            position_ticket = str(getattr(deal_rows[0], "position_id", result.order)) if deal_rows else str(result.order)
+            position_ticket = str(getattr(deal_rows[0], "position_id", result.order)) if deal_rows else None
+            executed_volume = float(getattr(result, "volume", 0) or 0)
+            if result.retcode == mt5.TRADE_RETCODE_DONE and executed_volume <= 0:
+                executed_volume = normalized_volume
+            if result.retcode == mt5.TRADE_RETCODE_DONE_PARTIAL and executed_volume <= 0:
+                raise RuntimeError("MT5 reported a partial fill without an executed volume")
+            order_status = (
+                "pending" if result.retcode == mt5.TRADE_RETCODE_PLACED else
+                "partial" if result.retcode == mt5.TRADE_RETCODE_DONE_PARTIAL else "filled"
+            )
             return {"broker": "mt5", "order_id": str(result.order), "deal_id": str(result.deal),
                     "position_ticket": position_ticket,
-                    "symbol": symbol, "side": side.lower(), "quantity": normalized_volume,
+                    "symbol": symbol, "side": side.lower(), "quantity": executed_volume,
                     "entry_price": float(result.price or price), "stop_loss": round(stop_loss, digits),
-                    "take_profit": round(take_profit, digits), "status": "accepted"}
+                    "take_profit": round(take_profit, digits), "status": order_status}
 
     async def account_equity(self) -> float:
         async with self._lock:
@@ -151,6 +161,48 @@ class MT5Connector(BrokerConnector):
             if equity <= 0:
                 raise RuntimeError("MT5 account equity is unavailable")
             return equity
+
+    async def account_status(self) -> dict[str, Any]:
+        async with self._lock:
+            mt5 = self._require_connection()
+            info = await asyncio.to_thread(mt5.account_info)
+            terminal = await asyncio.to_thread(mt5.terminal_info)
+            if info is None or terminal is None:
+                raise RuntimeError("MT5 account or terminal status is unavailable")
+            trade_mode = {
+                getattr(mt5, "ACCOUNT_TRADE_MODE_DEMO", -1): "demo",
+                getattr(mt5, "ACCOUNT_TRADE_MODE_CONTEST", -2): "contest",
+                getattr(mt5, "ACCOUNT_TRADE_MODE_REAL", -3): "real",
+            }.get(getattr(info, "trade_mode", None), "unknown")
+            return {
+                "login": str(getattr(info, "login", "")),
+                "server": str(getattr(info, "server", "")),
+                "company": str(getattr(info, "company", "")),
+                "currency": str(getattr(info, "currency", "")),
+                "equity": float(getattr(info, "equity", 0) or 0),
+                "trade_mode": trade_mode,
+                "trade_allowed": bool(getattr(terminal, "trade_allowed", False)),
+                "trade_expert": bool(getattr(terminal, "trade_expert", False)),
+                "terminal_version": str(getattr(terminal, "build", "")),
+            }
+
+    async def symbol_info(self, symbol: str) -> dict[str, Any]:
+        async with self._lock:
+            mt5 = self._require_connection()
+            if not await asyncio.to_thread(mt5.symbol_select, symbol, True):
+                raise ValueError(f"Could not select MT5 symbol '{symbol}'")
+            info = await asyncio.to_thread(mt5.symbol_info, symbol)
+            if info is None:
+                raise RuntimeError(f"MT5 symbol metadata unavailable for '{symbol}'")
+            return {
+                "volume_step": float(info.volume_step),
+                "volume_min": float(info.volume_min),
+                "volume_max": float(info.volume_max),
+                "digits": int(info.digits),
+                "contract_size": float(getattr(info, "trade_contract_size", 0) or 0),
+                "trade_tick_size": float(getattr(info, "trade_tick_size", 0) or 0),
+                "trade_tick_value": float(getattr(info, "trade_tick_value", 0) or 0),
+            }
 
     async def risk_per_lot(self, symbol: str, entry: float, stop_loss: float) -> float:
         async with self._lock:
@@ -183,6 +235,32 @@ class MT5Connector(BrokerConnector):
                 raise RuntimeError(f"MT5 position query failed: {mt5.last_error()}")
             return [{"ticket": str(row.ticket), "side": "buy" if row.type == mt5.POSITION_TYPE_BUY else "sell",
                      "volume": float(row.volume)} for row in rows]
+
+    async def order_status(self, order_id: str) -> str | None:
+        async with self._lock:
+            mt5 = self._require_connection()
+            ticket = int(order_id)
+            active = await asyncio.to_thread(mt5.orders_get, ticket=ticket)
+            if active is None:
+                raise RuntimeError(f"MT5 active-order query failed: {mt5.last_error()}")
+            if active:
+                return "pending"
+            history = await asyncio.to_thread(mt5.history_orders_get, ticket=ticket)
+            if history is None:
+                raise RuntimeError(f"MT5 order-history query failed: {mt5.last_error()}")
+            if not history:
+                return None
+            state = history[0].state
+            mapping = {
+                getattr(mt5, "ORDER_STATE_STARTED", -1): "pending",
+                getattr(mt5, "ORDER_STATE_PLACED", -2): "pending",
+                getattr(mt5, "ORDER_STATE_PARTIAL", -3): "partial",
+                getattr(mt5, "ORDER_STATE_FILLED", -4): "filled",
+                getattr(mt5, "ORDER_STATE_CANCELED", -5): "canceled",
+                getattr(mt5, "ORDER_STATE_REJECTED", -6): "rejected",
+                getattr(mt5, "ORDER_STATE_EXPIRED", -7): "expired",
+            }
+            return mapping.get(state, "unknown")
 
     async def close_position(self, ticket: str, *, deviation: int = 30) -> dict[str, Any]:
         async with self._lock:

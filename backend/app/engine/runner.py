@@ -19,6 +19,7 @@ class MarketEvent:
     exchange: str
     symbol: str
     payload: dict[str, Any]
+    timeframe: str = ""
 
 
 class MarketEngine:
@@ -33,11 +34,13 @@ class MarketEngine:
         *,
         on_event: Callable[[MarketEvent], Awaitable[None]] | None = None,
         queue_size: int = 10_000,
+        ticker_symbols: list[str] | None = None,
     ) -> None:
         self.connector = connector
         self.cache = cache
         self.symbols = symbols
         self.timeframe = timeframe
+        self.ticker_symbols = list(ticker_symbols) if ticker_symbols is not None else list(symbols)
         self.on_event = on_event
         self.queue: asyncio.Queue[MarketEvent] = asyncio.Queue(maxsize=queue_size)
         self._stop = asyncio.Event()
@@ -60,17 +63,18 @@ class MarketEngine:
                     if history and self.on_event:
                         await self.on_event(MarketEvent(
                             "history", self.connector.exchange_id, symbol,
-                            {"candles": history[:-1]},
+                            {"candles": history[:-1]}, self.timeframe,
                         ))
                 except Exception:
                     logger.exception("Could not prime candle history for %s", symbol)
         self._tasks.append(asyncio.create_task(self._process_queue(), name="market-event-processor"))
-        for symbol in self.symbols:
+        for symbol in self.ticker_symbols:
             if self.connector.websocket_available:
                 ticker_feed = self._ticker_feed(symbol)
             else:
                 ticker_feed = self._poll_ticker_feed(symbol)
             self._tasks.append(asyncio.create_task(self._supervise(ticker_feed), name=f"ticker:{symbol}"))
+        for symbol in self.symbols:
             if self.connector.ws is not None and self.connector.ws.has.get("watchOHLCV"):
                 self._tasks.append(asyncio.create_task(self._supervise(self._candle_feed(symbol)), name=f"candles:{symbol}"))
             else:
@@ -115,7 +119,7 @@ class MarketEngine:
             if previous_timestamp is not None and timestamp != previous_timestamp and previous_row is not None:
                 closed = {"timestamp": previous_row[0], "open": previous_row[1], "high": previous_row[2],
                           "low": previous_row[3], "close": previous_row[4], "volume": previous_row[5]}
-                await self._offer(MarketEvent("candle", self.connector.exchange_id, symbol, closed))
+                await self._offer(MarketEvent("candle", self.connector.exchange_id, symbol, closed, self.timeframe))
             previous_timestamp, previous_row = timestamp, row
 
     async def _poll_ticker_feed(self, symbol: str) -> None:
@@ -132,13 +136,13 @@ class MarketEngine:
             if rows:
                 if not primed:
                     await self._offer(MarketEvent("history", self.connector.exchange_id, symbol,
-                                                  {"candles": rows[:-1]}))
+                                                  {"candles": rows[:-1]}, self.timeframe))
                     primed = True
                 latest_open = int(rows[-1]["timestamp"])
                 if last_closed is not None and latest_open > last_closed:
                     closed = rows[-2] if len(rows) > 1 else None
                     if closed is not None:
-                        await self._offer(MarketEvent("candle", self.connector.exchange_id, symbol, closed))
+                        await self._offer(MarketEvent("candle", self.connector.exchange_id, symbol, closed, self.timeframe))
                 last_closed = latest_open
             await asyncio.sleep(5.0)
 
@@ -198,9 +202,10 @@ class MT5MarketEngine:
     """Polling supervisor for MT5 terminals, which expose IPC rather than CCXT Pro streams."""
 
     def __init__(self, connector: MT5Connector, cache: MarketCache, symbols: list[str], timeframe: str,
-                 on_event: Callable[[MarketEvent], Awaitable[None]]) -> None:
+                 on_event: Callable[[MarketEvent], Awaitable[None]], *, enable_ticker: bool = True) -> None:
         self.connector, self.cache, self.symbols, self.timeframe = connector, cache, symbols, timeframe
         self.on_event = on_event
+        self.enable_ticker = enable_ticker
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
         self._last_bars: dict[str, int] = {}
@@ -224,7 +229,7 @@ class MT5MarketEngine:
     def status(self) -> dict[str, Any]:
         return {"running": bool(self._tasks), "exchange": "mt5", "symbols": self.symbols,
                 "timeframe": self.timeframe, "processed_events": self._processed,
-                "errors": self._errors, "paper_only": True}
+                "errors": self._errors, "paper_only": True, "ticker_enabled": self.enable_ticker}
 
     async def _supervise(self, symbol: str) -> None:
         delay = 1.0
@@ -232,22 +237,23 @@ class MT5MarketEngine:
         last_closed_timestamp: int | None = None
         while not self._stop.is_set():
             try:
-                quote = await self.connector.quote(symbol)
-                quote["exchange"] = "mt5"
-                await self.cache.set_tick(quote)
-                await self.on_event(MarketEvent("tick", "mt5", symbol, quote))
+                if self.enable_ticker:
+                    quote = await self.connector.quote(symbol)
+                    quote["exchange"] = "mt5"
+                    await self.cache.set_tick(quote)
+                    await self.on_event(MarketEvent("tick", "mt5", symbol, quote))
                 rows = await self.connector.candles(symbol, self.timeframe, 300)
                 if rows:
                     latest_timestamp = int(rows[-1]["timestamp"])
                     if not primed:
                         if len(rows) > 1:
-                            await self.on_event(MarketEvent("history", "mt5", symbol, {"candles": rows[:-1]}))
+                            await self.on_event(MarketEvent("history", "mt5", symbol, {"candles": rows[:-1]}, self.timeframe))
                         primed = True
                     elif latest_timestamp != self._last_bars.get(symbol):
                         previous = rows[-2] if len(rows) > 1 else None
                         if previous and int(previous["timestamp"]) != last_closed_timestamp:
                             await self.cache.set_candle(previous, "mt5", symbol, self.timeframe)
-                            await self.on_event(MarketEvent("candle", "mt5", symbol, previous))
+                            await self.on_event(MarketEvent("candle", "mt5", symbol, previous, self.timeframe))
                             last_closed_timestamp = int(previous["timestamp"])
                     self._last_bars[symbol] = latest_timestamp
                 self._processed += 1
