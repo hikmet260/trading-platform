@@ -45,7 +45,7 @@ class StrategyRuntime:
         self.events = parse_news_events(settings.news_events_json)
         self.calendar = None
         self.live_positions = None
-        self._bars: dict[tuple[str, str, str], deque[dict]] = defaultdict(lambda: deque(maxlen=1000))
+        self._bars: dict[tuple[str, str, str, str, str], deque[dict]] = defaultdict(lambda: deque(maxlen=1000))
         self._last_signal: dict[tuple[str, str, str], int] = {}
         self._equity_by_tenant: dict[str, float] = {settings.tenant_id: self.paper_equity}
         self._proposals = 0
@@ -164,15 +164,16 @@ class StrategyRuntime:
             await self._manage_open_positions(event)
             return
         timeframe = event.timeframe or settings.engine_timeframe
+        scope = (event.tenant_id or "", event.broker_account_id or "")
         if event.kind == "history":
             history = event.payload.get("candles", [])
-            target = self._bars[(event.exchange, event.symbol, timeframe)]
+            target = self._bars[(*scope, event.exchange, event.symbol, timeframe)]
             target.clear()
             target.extend(history[-1000:])
             return
         if event.kind != "candle":
             return
-        key = (event.exchange, event.symbol, timeframe)
+        key = (*scope, event.exchange, event.symbol, timeframe)
         bars = self._bars[key]
         candle = event.payload
         if bars and bars[-1]["timestamp"] == candle["timestamp"]:
@@ -188,6 +189,10 @@ class StrategyRuntime:
             strategies = list(result.all())
 
         for strategy, strategy_broker in strategies:
+            if event.tenant_id and (strategy.tenant_id or settings.tenant_id) != event.tenant_id:
+                continue
+            if event.broker_account_id and strategy.broker_account_id != event.broker_account_id:
+                continue
             try:
                 rule = StrategyRule.model_validate(strategy.rule)
             except Exception:

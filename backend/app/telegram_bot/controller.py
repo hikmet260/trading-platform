@@ -7,14 +7,15 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from sqlalchemy import select
 
 from app.settings import settings
 from app.engine.chart_snapshot import render_candlestick_snapshot
 from app.storage.cache import MarketCache
 from app.storage.database import Database
-from app.storage.models import TradeRecord
+from app.storage.models import AuditRecord, BrokerAccountRecord, StrategyRecord, SystemSettingsRecord, TradeRecord
+from app.strategies.rules import parse_strategy_prompt
 from app.notifications.service import enqueue_notification, enqueue_notification_in_session
 
 
@@ -28,6 +29,7 @@ class TelegramController:
         self.on_kill = None
         self.on_resume = None
         self.on_decision = None
+        self.on_ai_message = None
         self.role = settings.telegram_role
         self.enabled = settings.telegram_enabled
         self.bot_token = settings.telegram_bot_token
@@ -79,16 +81,30 @@ class TelegramController:
         if not self.bot_token or not self.chat_id:
             self.state = "misconfigured"
             return
-        self.application = Application.builder().token(self.bot_token).build()
+        self.application = (
+            Application.builder()
+            .token(self.bot_token)
+            .connect_timeout(20)
+            .read_timeout(20)
+            .write_timeout(20)
+            .pool_timeout(20)
+            .get_updates_connect_timeout(20)
+            .get_updates_read_timeout(40)
+            .get_updates_write_timeout(20)
+            .get_updates_pool_timeout(20)
+            .build()
+        )
         self.application.add_handler(CallbackQueryHandler(self._on_callback))
+        self.application.add_handler(CommandHandler("start", self._on_start_command))
         self.application.add_handler(CommandHandler("kill", self._on_kill_command))
         self.application.add_handler(CommandHandler("resume", self._on_resume_command))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_text_message))
         await self.application.initialize()
         await self.application.start()
         if self.application.updater is None:
             self.state = "misconfigured"
             return
-        await self.application.updater.start_polling(drop_pending_updates=True)
+        await self.application.updater.start_polling(drop_pending_updates=False)
         self.digest_task = asyncio.create_task(self._digest_loop(), name="telegram-daily-digest")
         self.state = "running"
 
@@ -213,6 +229,10 @@ class TelegramController:
             return
         await query.answer()
         data = query.data or ""
+        if data.startswith("strategy_approve:") or data.startswith("strategy_discard:"):
+            action, _, draft_id = data.partition(":")
+            await self._handle_strategy_decision(query, action, draft_id)
+            return
         if data == "kill":
             result = await self.on_kill() if self.on_kill else 0
             await self._edit_callback_message(query,
@@ -273,12 +293,181 @@ class TelegramController:
     async def _authorized(self, update: Update) -> bool:
         chat = update.effective_chat
         user = update.effective_user
-        if (chat is None or str(chat.id) != str(self.chat_id) or user is None
-                or str(user.id) not in self._authorized_ids()):
-            if update.effective_message:
-                await update.effective_message.reply_text("Not authorized")
+        message = update.effective_message
+        if chat is None or user is None:
+            if message:
+                await message.reply_text("Could not identify this Telegram chat or account. Send /start and try again.")
+            return False
+        if str(chat.id) != str(self.chat_id):
+            if message:
+                await message.reply_text(
+                    "This chat isn’t the configured Telegram destination. "
+                    "Set Target Chat ID to the Chat ID shown by /start in this conversation."
+                )
+            return False
+        if str(user.id) not in self._authorized_ids():
+            if message:
+                await message.reply_text(
+                    "Your Telegram account isn’t on the allowed list. "
+                    "Add the Allowed User ID shown by /start in Settings → Telegram."
+                )
             return False
         return True
+
+    async def _on_start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat = update.effective_chat
+        user = update.effective_user
+        message = update.effective_message
+        if chat is None or user is None or message is None:
+            return
+        await message.reply_text(
+            "Telegram setup IDs\n"
+            f"Target Chat ID: {chat.id}\n"
+            f"Your Allowed User ID: {user.id}\n\n"
+            "Enter the chat ID as Target Chat ID in the platform Settings. "
+            "Add your user ID to Allowed User IDs so you can approve proposals. "
+            "In a private chat, these IDs are usually the same."
+        )
+
+    async def _on_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        message = update.effective_message
+        chat = update.effective_chat
+        user = update.effective_user
+        if message is None or chat is None or user is None or not message.text:
+            return
+        if not self.on_ai_message:
+            await message.reply_text("AI chat is unavailable. Check the Telegram worker status and AI settings.")
+            return
+        try:
+            response_message = await message.reply_text("Got it. I’m checking with the AI…")
+        except Exception:
+            logger.exception("Telegram could not acknowledge an authorized text message")
+            return
+        try:
+            result = await self.on_ai_message(
+                tenant_id=settings.tenant_id,
+                chat_id=str(chat.id),
+                user_id=str(user.id),
+                message=message.text.strip(),
+            )
+        except Exception:
+            logger.exception("Telegram AI message failed for tenant %s", settings.tenant_id)
+            await response_message.edit_text("I couldn’t process that message. Check the AI settings and try again.")
+            return
+
+        reply = str(result.get("reply") or "How can I help?")
+        draft_id = result.get("strategy_draft_id")
+        if not draft_id:
+            await response_message.edit_text(reply[:4000])
+            return
+
+        prompt = str(result.get("strategy_prompt") or "")
+        name = str(result.get("strategy_name") or "AI strategy")
+        text = (
+            f"{reply}\n\nStrategy draft: {name}\n{prompt}\n\n"
+            "Approving saves and activates this strategy. Trades then follow your dashboard execution mode and risk controls. "
+            "Semi-auto requires approval for each trade proposal; full-auto can place trades automatically after risk checks."
+        )
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Approve & Activate", callback_data=f"strategy_approve:{draft_id}"),
+            InlineKeyboardButton("Discard", callback_data=f"strategy_discard:{draft_id}"),
+        ]])
+        await response_message.edit_text(text[:4000], reply_markup=keyboard)
+
+    async def _handle_strategy_decision(self, query, action: str, draft_id: str) -> None:
+        if action not in {"strategy_approve", "strategy_discard"} or not draft_id:
+            await self._edit_callback_message(query, "Unknown strategy action")
+            return
+        key = f"telegram:strategy-draft:{draft_id}"
+        raw_draft = await self.cache.redis.get(key)
+        if not raw_draft:
+            async with self.database.sessions() as session:
+                existing = await session.get(StrategyRecord, draft_id)
+            if action == "strategy_approve" and existing and existing.tenant_id == settings.tenant_id:
+                await self._edit_callback_message(query, f"Strategy already active: {existing.name}")
+            else:
+                await self._edit_callback_message(query, "This strategy draft expired or was already handled")
+            return
+
+        draft = json.loads(raw_draft)
+        if (draft.get("tenant_id") != settings.tenant_id
+                or draft.get("chat_id") != str(query.message.chat_id if query.message else "")
+                or draft.get("user_id") != str(query.from_user.id)):
+            await self._edit_callback_message(query, "This strategy draft belongs to another user or chat")
+            return
+        if action == "strategy_discard":
+            await self.cache.redis.delete(key)
+            await self._edit_callback_message(query, "Strategy draft discarded")
+            return
+
+        try:
+            prompt = str(draft["prompt"])
+            rule = parse_strategy_prompt(prompt)
+        except (KeyError, TypeError, ValueError) as exc:
+            await self._edit_callback_message(query, f"Could not approve this strategy: {exc}")
+            return
+
+        tenant_id = str(draft["tenant_id"])
+        execution_mode = settings.execution_mode
+        broker_account_id = None
+        async with self.database.sessions() as session:
+            config = await session.get(SystemSettingsRecord, tenant_id)
+            if config:
+                execution_mode = config.execution_mode or execution_mode
+            if not settings.engine_paper_mode:
+                if not settings.live_trading_enabled:
+                    await self._edit_callback_message(query, "Live trading is disabled. Configure live execution in the dashboard before activating a live strategy.")
+                    return
+                accounts = await session.scalars(select(BrokerAccountRecord).where(
+                    BrokerAccountRecord.tenant_id == tenant_id,
+                    BrokerAccountRecord.enabled.is_(True),
+                ))
+                enabled_accounts = list(accounts.all())
+                if len(enabled_accounts) != 1:
+                    await self._edit_callback_message(query, "Select and enable exactly one broker account in the dashboard before activating a live strategy.")
+                    return
+                broker_account_id = enabled_accounts[0].id
+
+            existing = await session.get(StrategyRecord, draft_id)
+            if existing is None:
+                strategy = StrategyRecord(
+                    id=draft_id,
+                    tenant_id=tenant_id,
+                    broker_account_id=broker_account_id,
+                    name=str(draft.get("name") or f"Telegram {rule.side.upper()} {rule.symbol}")[:120],
+                    prompt=prompt,
+                    rule=rule.model_dump(mode="json"),
+                    enabled=True,
+                )
+                session.add(strategy)
+                session.add(AuditRecord(
+                    tenant_id=tenant_id,
+                    actor=f"telegram:{query.from_user.id}",
+                    action="strategy_created",
+                    entity_id=draft_id,
+                    details={
+                        "enabled": True,
+                        "broker_account_id": broker_account_id,
+                        "mode": "paper" if settings.engine_paper_mode else "live",
+                        "source": "telegram_ai",
+                        "execution_mode": execution_mode,
+                    },
+                ))
+                await session.commit()
+
+        await self.cache.redis.delete(key)
+        mode = "paper" if settings.engine_paper_mode else "live"
+        execution_note = (
+            "Each trade proposal will need your approval."
+            if execution_mode == "semi_auto"
+            else "Trades may execute automatically after the platform risk checks."
+        )
+        await self._edit_callback_message(
+            query,
+            f"Approved and activated: {draft.get('name')} ({mode} mode). {execution_note}",
+        )
 
     async def _on_kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):

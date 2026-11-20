@@ -1416,6 +1416,7 @@ async def mt5_agent_market_data(payload: MT5AgentMarketDataRequest, request: Req
         body = candles[0]
     await app.state.strategy_runtime.on_event(MarketEvent(
         payload.kind, "mt5", payload.symbol, body, payload.timeframe,
+        tenant_id=agent.tenant_id, broker_account_id=agent.broker_account_id,
     ))
     return {"accepted": len(candles)}
 
@@ -1438,8 +1439,10 @@ async def mt5_agent_claim_command(request: Request) -> dict | None:
             ).values(status="failed", error="Command expired before it was claimed", finished_at=now))
             await session.commit()
             return None
+        account = await session.get(BrokerAccountRecord, agent.broker_account_id)
         if command.command_type == "execute_order" and (
             not settings.live_trading_enabled or settings.engine_paper_mode
+            or account is None or not account.enabled
             or await app.state.cache.is_kill_switch_active(agent.tenant_id)
         ):
             command.status = "failed"

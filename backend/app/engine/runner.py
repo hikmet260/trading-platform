@@ -20,6 +20,8 @@ class MarketEvent:
     symbol: str
     payload: dict[str, Any]
     timeframe: str = ""
+    tenant_id: str | None = None
+    broker_account_id: str | None = None
 
 
 class MarketEngine:
