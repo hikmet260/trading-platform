@@ -7,7 +7,7 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from sqlalchemy import select
 
 from app.settings import settings
@@ -28,6 +28,7 @@ class TelegramController:
         self.on_kill = None
         self.on_resume = None
         self.on_decision = None
+        self.on_ai_message = None
         self.role = settings.telegram_role
         self.enabled = settings.telegram_enabled
         self.bot_token = settings.telegram_bot_token
@@ -96,6 +97,7 @@ class TelegramController:
         self.application.add_handler(CommandHandler("start", self._on_start_command))
         self.application.add_handler(CommandHandler("kill", self._on_kill_command))
         self.application.add_handler(CommandHandler("resume", self._on_resume_command))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_text_message))
         await self.application.initialize()
         await self.application.start()
         if self.application.updater is None:
@@ -321,6 +323,53 @@ class TelegramController:
             "Add your user ID to Allowed User IDs so you can approve proposals. "
             "In a private chat, these IDs are usually the same."
         )
+
+    async def _on_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        message = update.effective_message
+        chat = update.effective_chat
+        user = update.effective_user
+        if message is None or chat is None or user is None or not message.text:
+            return
+        if not self.on_ai_message:
+            await message.reply_text("AI chat is unavailable. Check the Telegram worker status and AI settings.")
+            return
+        try:
+            response_message = await message.reply_text("Got it. I’m checking with the AI…")
+        except Exception:
+            logger.exception("Telegram could not acknowledge an authorized text message")
+            return
+        try:
+            result = await self.on_ai_message(
+                tenant_id=settings.tenant_id,
+                chat_id=str(chat.id),
+                user_id=str(user.id),
+                message=message.text.strip(),
+            )
+        except Exception:
+            logger.exception("Telegram AI message failed for tenant %s", settings.tenant_id)
+            await response_message.edit_text("I couldn’t process that message. Check the AI settings and try again.")
+            return
+
+        reply = str(result.get("reply") or "How can I help?")
+        draft_id = result.get("strategy_draft_id")
+        if not draft_id:
+            await response_message.edit_text(reply[:4000])
+            return
+
+        prompt = str(result.get("strategy_prompt") or "")
+        name = str(result.get("strategy_name") or "AI strategy")
+        text = (
+            f"{reply}\n\nStrategy draft: {name}\n{prompt}\n\n"
+            "Approving saves and activates this strategy. Trades then follow your dashboard execution mode and risk controls. "
+            "Semi-auto requires approval for each trade proposal; full-auto can place trades automatically after risk checks."
+        )
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Approve & Activate", callback_data=f"strategy_approve:{draft_id}"),
+            InlineKeyboardButton("Discard", callback_data=f"strategy_discard:{draft_id}"),
+        ]])
+        await response_message.edit_text(text[:4000], reply_markup=keyboard)
 
     async def _on_kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
