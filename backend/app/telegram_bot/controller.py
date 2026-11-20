@@ -286,10 +286,24 @@ class TelegramController:
     async def _authorized(self, update: Update) -> bool:
         chat = update.effective_chat
         user = update.effective_user
-        if (chat is None or str(chat.id) != str(self.chat_id) or user is None
-                or str(user.id) not in self._authorized_ids()):
-            if update.effective_message:
-                await update.effective_message.reply_text("Not authorized")
+        message = update.effective_message
+        if chat is None or user is None:
+            if message:
+                await message.reply_text("Could not identify this Telegram chat or account. Send /start and try again.")
+            return False
+        if str(chat.id) != str(self.chat_id):
+            if message:
+                await message.reply_text(
+                    "This chat isn’t the configured Telegram destination. "
+                    "Set Target Chat ID to the Chat ID shown by /start in this conversation."
+                )
+            return False
+        if str(user.id) not in self._authorized_ids():
+            if message:
+                await message.reply_text(
+                    "Your Telegram account isn’t on the allowed list. "
+                    "Add the Allowed User ID shown by /start in Settings → Telegram."
+                )
             return False
         return True
 
