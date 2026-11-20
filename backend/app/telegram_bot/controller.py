@@ -93,6 +93,7 @@ class TelegramController:
             .build()
         )
         self.application.add_handler(CallbackQueryHandler(self._on_callback))
+        self.application.add_handler(CommandHandler("start", self._on_start_command))
         self.application.add_handler(CommandHandler("kill", self._on_kill_command))
         self.application.add_handler(CommandHandler("resume", self._on_resume_command))
         await self.application.initialize()
@@ -291,6 +292,21 @@ class TelegramController:
                 await update.effective_message.reply_text("Not authorized")
             return False
         return True
+
+    async def _on_start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat = update.effective_chat
+        user = update.effective_user
+        message = update.effective_message
+        if chat is None or user is None or message is None:
+            return
+        await message.reply_text(
+            "Telegram setup IDs\n"
+            f"Target Chat ID: {chat.id}\n"
+            f"Your Allowed User ID: {user.id}\n\n"
+            "Enter the chat ID as Target Chat ID in the platform Settings. "
+            "Add your user ID to Allowed User IDs so you can approve proposals. "
+            "In a private chat, these IDs are usually the same."
+        )
 
     async def _on_kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
