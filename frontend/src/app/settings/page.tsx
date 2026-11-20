@@ -957,10 +957,10 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between pb-3 border-b border-[#26262b]">
                 <div>
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-300">
-                    Telegram Notification & Command Bot
+                    Telegram AI, Notifications & Trade Approvals
                   </h2>
                   <p className="mt-0.5 text-[11px] text-zinc-400">
-                    Receive instant trade proposal alerts, execution confirmations, daily digest summaries, and run emergency /kill commands.
+                    Chat with the AI to draft strategies, approve drafts to save and activate them, and receive trade proposals and risk alerts. Emergency controls are available here too.
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
@@ -975,6 +975,20 @@ export default function SettingsPage() {
                     {tgEnabled ? "Active" : "Disabled"}
                   </span>
                 </label>
+              </div>
+
+              <div className="mt-4 rounded-lg border border-[#2b2b32] bg-[#131316] p-4 text-xs text-zinc-300">
+                <p className="font-medium text-zinc-100">
+                  {settings?.telegram.configured ? "Telegram setup" : "Connect your Telegram bot"}
+                </p>
+                <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-zinc-400">
+                  <li>Create a bot with <span className="text-zinc-200">@BotFather</span> and paste its token below.</li>
+                  <li>Start a chat with your bot, then enter the destination chat ID and the Telegram user IDs allowed to approve or skip proposals.</li>
+                  <li>Turn on Telegram, save the settings, then send a test message to confirm delivery.</li>
+                </ol>
+                <p className="mt-2 text-[11px] text-zinc-500">
+                  Configure an AI provider under AI Model & API to chat with the bot. Trade approvals are accepted only from an allowed user in the configured chat; the bot token is stored encrypted.
+                </p>
               </div>
 
               <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -1022,7 +1036,7 @@ export default function SettingsPage() {
                     className="w-full rounded-lg border border-[#2b2b32] bg-[#131316] px-3 py-2 text-xs text-zinc-200 font-mono outline-none focus:border-cyan-500"
                   />
                   <span className="mt-1 block text-[10px] text-zinc-500">
-                    User chat ID or group/channel ID for trade alerts.
+                    User or group chat ID where alerts and approval buttons should arrive.
                   </span>
                 </div>
 
@@ -1057,6 +1071,7 @@ export default function SettingsPage() {
                     <option value="Europe/London">Europe/London (GMT/BST)</option>
                     <option value="Europe/Frankfurt">Europe/Frankfurt (CET/CEST)</option>
                     <option value="Asia/Dubai">Asia/Dubai (GST)</option>
+                    <option value="Africa/Addis_Ababa">Africa/Addis_Ababa (EAT)</option>
                     <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
                     <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
                   </select>
