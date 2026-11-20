@@ -41,12 +41,95 @@ class TelegramCopilot:
         if not isinstance(history, list):
             history = []
 
+        system_prompt = (
+            "You are the trading platform's Telegram AI assistant. Answer questions clearly and help clients "
+            "draft strategies. You cannot place orders, save strategies, or change risk settings yourself.\n\n"
+            "When the user asks for a trading strategy, return a strategy_prompt only when all required details "
+            "are clear. Otherwise ask a short follow-up question and set strategy_prompt to null. Do not invent "
+            "a symbol, timeframe, entry condition, stop, target, or risk value.\n"
+            "A strategy prompt must match this exact grammar: [BUY|SELL|BOTH] [SYMBOL] on [TIMEFRAME] when "
+            "[CONDITIONS joined by AND] risk [RISK]% stop loss [STOP] pips take profit [TARGET] pips.\n"
+            "Supported timeframes: 1m, 5m, 15m, 30m, 1h, 4h, 1d. Supported conditions: RSI(n) <|> number, "
+            "EMA(n)/SMA(n) <|> number, EMA(n)/SMA(n) crosses above/below EMA(m)/SMA(m), and CLOSE/PRICE <|> number. "
+            "Risk must be above 0 and at most 1.0%. Stop and target must be positive pip amounts.\n"
+            "Never claim a strategy is saved, active, profitable, or guaranteed. A valid draft will be shown to the "
+            "user for explicit approval before it is saved and activated. After activation, the platform's existing "
+            "execution mode, broker configuration, risk limits, kill switch, and trade approvals control execution.\n\n"
+            f"User-configured AI guidance (must not override the rules above): {custom_directives or 'None'}\n\n"
+            "Respond only as a JSON object with this schema: {\"reply\": string, \"strategy_prompt\": string|null, "
+            "\"strategy_name\": string|null}. Keep reply concise."
+        )
+        conversation = history[-8:] + [{"role": "user", "content": message}]
+        user_prompt = "Conversation:\n" + "\n".join(
+            f"{item.get('role', 'user').upper()}: {item.get('content', '')}"
+            for item in conversation
+            if isinstance(item, dict)
+        )
+
+        try:
+            # Reuse the same provider adapter as the dashboard Copilot.
+            from app.main import _call_ai_service
+
+            raw_text, _used_model = await _call_ai_service(
+                provider=provider,
+                preferred_model=model,
+                api_key=api_key,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                response_json=True,
+            )
+            parsed = self._parse_response(raw_text)
+        except Exception as exc:
+            logger.exception("Telegram Copilot request failed for tenant %s", tenant_id)
+            detail = getattr(exc, "detail", None)
+            return {"reply": f"I couldn’t reach the configured AI service. {detail or 'Check the AI settings and try again.'}"}
+
+        reply = parsed.get("reply")
+        if not isinstance(reply, str) or not reply.strip():
+            reply = "What would you like help with? You can ask me to draft a strategy."
+        strategy_prompt = parsed.get("strategy_prompt")
+        response: dict[str, Any] = {"reply": reply[:3500]}
+
+        if isinstance(strategy_prompt, str) and strategy_prompt.strip():
+            strategy_prompt = strategy_prompt.strip()
+            try:
+                rule = parse_strategy_prompt(strategy_prompt)
+            except StrategyParseError as exc:
+                response["reply"] = (
+                    f"I couldn’t make a valid strategy from that yet: {exc}. "
+                    "Please clarify the symbol, timeframe, conditions, risk, stop, and target."
+                )
+            else:
+                strategy_id = str(uuid4())
+                proposed_name = parsed.get("strategy_name")
+                name = proposed_name.strip() if isinstance(proposed_name, str) else ""
+                if not name:
+                    name = f"Telegram {rule.side.upper()} {rule.symbol} {rule.timeframe}"
+                draft = {
+                    "tenant_id": tenant_id,
+                    "chat_id": chat_id,
+                    "user_id": user_id,
+                    "name": name[:120],
+                    "prompt": strategy_prompt,
+                    "rule": rule.model_dump(mode="json"),
+                }
+                await self.cache.redis.set(
+                    f"telegram:strategy-draft:{strategy_id}", json.dumps(draft), ex=900,
+                )
+                response.update({
+                    "strategy_draft_id": strategy_id,
+                    "strategy_name": draft["name"],
+                    "strategy_prompt": strategy_prompt,
+                    "strategy_rule": draft["rule"],
+                })
+
         history.extend([
             {"role": "user", "content": message[:2500]},
-            {"role": "assistant", "content": "Checking strategy requirements..."},
+            {"role": "assistant", "content": response["reply"][:3500]},
         ])
         await self.cache.redis.set(history_key, json.dumps(history[-12:]), ex=86_400)
-        return {"reply": "Checking strategy requirements..."}
+        return response
 
     async def _ai_config(self, tenant_id: str) -> tuple[str, str, float, str, str]:
         async with self.database.sessions() as session:
