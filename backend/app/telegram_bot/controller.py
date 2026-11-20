@@ -228,6 +228,10 @@ class TelegramController:
             return
         await query.answer()
         data = query.data or ""
+        if data.startswith("strategy_approve:") or data.startswith("strategy_discard:"):
+            action, _, draft_id = data.partition(":")
+            await self._handle_strategy_decision(query, action, draft_id)
+            return
         if data == "kill":
             result = await self.on_kill() if self.on_kill else 0
             await self._edit_callback_message(query,
@@ -370,6 +374,16 @@ class TelegramController:
             InlineKeyboardButton("Discard", callback_data=f"strategy_discard:{draft_id}"),
         ]])
         await response_message.edit_text(text[:4000], reply_markup=keyboard)
+
+    async def _handle_strategy_decision(self, query, action: str, draft_id: str) -> None:
+        if action not in {"strategy_approve", "strategy_discard"} or not draft_id:
+            await self._edit_callback_message(query, "Unknown strategy action")
+            return
+        key = f"telegram:strategy-draft:{draft_id}"
+        if action == "strategy_discard":
+            await self.cache.redis.delete(key)
+            await self._edit_callback_message(query, "Strategy draft discarded")
+            return
 
     async def _on_kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
