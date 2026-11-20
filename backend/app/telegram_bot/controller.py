@@ -79,7 +79,19 @@ class TelegramController:
         if not self.bot_token or not self.chat_id:
             self.state = "misconfigured"
             return
-        self.application = Application.builder().token(self.bot_token).build()
+        self.application = (
+            Application.builder()
+            .token(self.bot_token)
+            .connect_timeout(20)
+            .read_timeout(20)
+            .write_timeout(20)
+            .pool_timeout(20)
+            .get_updates_connect_timeout(20)
+            .get_updates_read_timeout(40)
+            .get_updates_write_timeout(20)
+            .get_updates_pool_timeout(20)
+            .build()
+        )
         self.application.add_handler(CallbackQueryHandler(self._on_callback))
         self.application.add_handler(CommandHandler("kill", self._on_kill_command))
         self.application.add_handler(CommandHandler("resume", self._on_resume_command))
@@ -88,7 +100,7 @@ class TelegramController:
         if self.application.updater is None:
             self.state = "misconfigured"
             return
-        await self.application.updater.start_polling(drop_pending_updates=True)
+        await self.application.updater.start_polling(drop_pending_updates=False)
         self.digest_task = asyncio.create_task(self._digest_loop(), name="telegram-daily-digest")
         self.state = "running"
 
