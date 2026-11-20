@@ -14,7 +14,8 @@ from app.settings import settings
 from app.engine.chart_snapshot import render_candlestick_snapshot
 from app.storage.cache import MarketCache
 from app.storage.database import Database
-from app.storage.models import TradeRecord
+from app.storage.models import AuditRecord, BrokerAccountRecord, StrategyRecord, SystemSettingsRecord, TradeRecord
+from app.strategies.rules import parse_strategy_prompt
 from app.notifications.service import enqueue_notification, enqueue_notification_in_session
 
 
@@ -380,10 +381,93 @@ class TelegramController:
             await self._edit_callback_message(query, "Unknown strategy action")
             return
         key = f"telegram:strategy-draft:{draft_id}"
+        raw_draft = await self.cache.redis.get(key)
+        if not raw_draft:
+            async with self.database.sessions() as session:
+                existing = await session.get(StrategyRecord, draft_id)
+            if action == "strategy_approve" and existing and existing.tenant_id == settings.tenant_id:
+                await self._edit_callback_message(query, f"Strategy already active: {existing.name}")
+            else:
+                await self._edit_callback_message(query, "This strategy draft expired or was already handled")
+            return
+
+        draft = json.loads(raw_draft)
+        if (draft.get("tenant_id") != settings.tenant_id
+                or draft.get("chat_id") != str(query.message.chat_id if query.message else "")
+                or draft.get("user_id") != str(query.from_user.id)):
+            await self._edit_callback_message(query, "This strategy draft belongs to another user or chat")
+            return
         if action == "strategy_discard":
             await self.cache.redis.delete(key)
             await self._edit_callback_message(query, "Strategy draft discarded")
             return
+
+        try:
+            prompt = str(draft["prompt"])
+            rule = parse_strategy_prompt(prompt)
+        except (KeyError, TypeError, ValueError) as exc:
+            await self._edit_callback_message(query, f"Could not approve this strategy: {exc}")
+            return
+
+        tenant_id = str(draft["tenant_id"])
+        execution_mode = settings.execution_mode
+        broker_account_id = None
+        async with self.database.sessions() as session:
+            config = await session.get(SystemSettingsRecord, tenant_id)
+            if config:
+                execution_mode = config.execution_mode or execution_mode
+            if not settings.engine_paper_mode:
+                if not settings.live_trading_enabled:
+                    await self._edit_callback_message(query, "Live trading is disabled. Configure live execution in the dashboard before activating a live strategy.")
+                    return
+                accounts = await session.scalars(select(BrokerAccountRecord).where(
+                    BrokerAccountRecord.tenant_id == tenant_id,
+                    BrokerAccountRecord.enabled.is_(True),
+                ))
+                enabled_accounts = list(accounts.all())
+                if len(enabled_accounts) != 1:
+                    await self._edit_callback_message(query, "Select and enable exactly one broker account in the dashboard before activating a live strategy.")
+                    return
+                broker_account_id = enabled_accounts[0].id
+
+            existing = await session.get(StrategyRecord, draft_id)
+            if existing is None:
+                strategy = StrategyRecord(
+                    id=draft_id,
+                    tenant_id=tenant_id,
+                    broker_account_id=broker_account_id,
+                    name=str(draft.get("name") or f"Telegram {rule.side.upper()} {rule.symbol}")[:120],
+                    prompt=prompt,
+                    rule=rule.model_dump(mode="json"),
+                    enabled=True,
+                )
+                session.add(strategy)
+                session.add(AuditRecord(
+                    tenant_id=tenant_id,
+                    actor=f"telegram:{query.from_user.id}",
+                    action="strategy_created",
+                    entity_id=draft_id,
+                    details={
+                        "enabled": True,
+                        "broker_account_id": broker_account_id,
+                        "mode": "paper" if settings.engine_paper_mode else "live",
+                        "source": "telegram_ai",
+                        "execution_mode": execution_mode,
+                    },
+                ))
+                await session.commit()
+
+        await self.cache.redis.delete(key)
+        mode = "paper" if settings.engine_paper_mode else "live"
+        execution_note = (
+            "Each trade proposal will need your approval."
+            if execution_mode == "semi_auto"
+            else "Trades may execute automatically after the platform risk checks."
+        )
+        await self._edit_callback_message(
+            query,
+            f"Approved and activated: {draft.get('name')} ({mode} mode). {execution_note}",
+        )
 
     async def _on_kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
