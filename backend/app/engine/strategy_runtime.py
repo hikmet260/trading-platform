@@ -189,6 +189,10 @@ class StrategyRuntime:
             strategies = list(result.all())
 
         for strategy, strategy_broker in strategies:
+            if event.tenant_id and (strategy.tenant_id or settings.tenant_id) != event.tenant_id:
+                continue
+            if event.broker_account_id and strategy.broker_account_id != event.broker_account_id:
+                continue
             try:
                 rule = StrategyRule.model_validate(strategy.rule)
             except Exception:
