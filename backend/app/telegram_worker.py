@@ -13,6 +13,7 @@ from app.settings import settings
 from app.storage.cache import MarketCache
 from app.storage.database import Database
 from app.notifications.service import deliver_one, webpush_available
+from app.telegram_bot.copilot import TelegramCopilot
 from app.telegram_bot.controller import TelegramController
 
 logger = logging.getLogger("telegram-worker")
@@ -26,6 +27,8 @@ async def run() -> None:
         await database.close()
         raise RuntimeError("Redis is unavailable")
     telegram = TelegramController(cache, database)
+    copilot = TelegramCopilot(database, cache)
+    telegram.on_ai_message = copilot.handle_message
     runtime = StrategyRuntime(database, cache, telegram)
     await runtime.initialize()
     runtime_config = await load_runtime_config(database, settings.tenant_id)
