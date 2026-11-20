@@ -34,6 +34,8 @@ The optional Trading Economics calendar is configured with `NEWS_CALENDAR_API_KE
 
 Enable the bot with `TELEGRAM_ENABLED=true`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and trusted user IDs in `TELEGRAM_ALLOWED_USER_IDS`. Alerts contain entry, computed position size, risk amount, stop and target. Approve/Skip and kill-switch actions require both the configured chat and an allowed user. The kill-switch halts new proposals and attempts to close tracked paper and live positions. The daily digest is scheduled at 20:00 in `TELEGRAM_TIMEZONE`.
 
+Authorized users can also message the Telegram bot to chat with the tenant's configured AI provider. Strategy requests are compiled through the deterministic strategy grammar and returned as a draft with Approve & Activate / Discard buttons. Approval saves an enabled tenant strategy and records an audit event. The strategy engine applies the configured execution mode and risk controls: semi-auto trade proposals still need individual approval, while full-auto can route orders after risk validation. Live strategies require live execution to be enabled and exactly one enabled broker account for Telegram approval; otherwise configure the account in the dashboard first. AI does not submit orders directly.
+
 ## QA commands
 
 From `backend/`, run the deterministic unit suite with:
