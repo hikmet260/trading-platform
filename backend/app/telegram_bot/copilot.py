@@ -47,3 +47,14 @@ class TelegramCopilot:
             elif provider == "openai":
                 api_key = settings.openai_api_key
         return provider, model, temperature, custom_directives or "", api_key
+
+    @staticmethod
+    def _parse_response(raw_text: str) -> dict[str, Any]:
+        clean = raw_text.strip()
+        if clean.startswith("```"):
+            clean = re.sub(r"^```(?:json)?\s*", "", clean)
+            clean = re.sub(r"\s*```$", "", clean)
+        value = json.loads(clean)
+        if not isinstance(value, dict):
+            raise ValueError("AI returned an invalid response")
+        return value
