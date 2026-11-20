@@ -23,6 +23,31 @@ class TelegramCopilot:
         self.database = database
         self.cache = cache
 
+    async def handle_message(
+        self, *, tenant_id: str, chat_id: str, user_id: str, message: str,
+    ) -> dict[str, Any]:
+        provider, model, temperature, custom_directives, api_key = await self._ai_config(tenant_id)
+        if not api_key and provider != "ollama":
+            return {
+                "reply": "AI isn’t configured yet. Add an AI provider and API key in the dashboard Settings, then try again.",
+            }
+
+        history_key = f"telegram:copilot:history:{tenant_id}:{chat_id}:{user_id}"
+        raw_history = await self.cache.redis.get(history_key)
+        try:
+            history = json.loads(raw_history) if raw_history else []
+        except (TypeError, json.JSONDecodeError):
+            history = []
+        if not isinstance(history, list):
+            history = []
+
+        history.extend([
+            {"role": "user", "content": message[:2500]},
+            {"role": "assistant", "content": "Checking strategy requirements..."},
+        ])
+        await self.cache.redis.set(history_key, json.dumps(history[-12:]), ex=86_400)
+        return {"reply": "Checking strategy requirements..."}
+
     async def _ai_config(self, tenant_id: str) -> tuple[str, str, float, str, str]:
         async with self.database.sessions() as session:
             record = await session.scalar(select(SystemSettingsRecord).where(
